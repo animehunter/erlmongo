@@ -41,14 +41,14 @@ save(Rec) ->
 			OID = mongodb:create_id(),
 			case mongodb:exec_insert(name(element(1,Rec)), #insert{documents = mongodb:encoderec(setelement(3, Rec, {oid, OID}))}) of
 				ok ->
-					OID;
+					{oid, OID};
 				R ->
 					R
 			end;
 		OID ->
 			case mongodb:exec_update(name(element(1,Rec)), #update{selector = mongodb:encode([{<<"_id">>, OID}]), document = mongodb:encoderec(Rec)}) of
 				ok ->
-					OID;
+					{oid, OID};
 				R ->
 					R
 			end
@@ -160,7 +160,7 @@ find(Col, Query, Selector, From, Limit) ->
 	end.
 
 find(Query, Selector, From, Limit) ->
-	Quer = #search{ndocs = Limit, nskip = From, criteria = mongodb:encoderec(Query), field_selector = mongodb:encoderec_selector(Query, Selector)},
+	Quer = #search{ndocs = Limit, nskip = From, criteria = mongodb:encode_findrec(Query), field_selector = mongodb:encoderec_selector(Query, Selector)},
 	case mongodb:exec_find(name(element(1,Query)), Quer) of
 		not_connected ->
 			not_connected;
@@ -181,7 +181,7 @@ findOpt(Col, Query, Selector, Opts, From, Limit) ->
 % Hint example: #mydoc.name
 findOpt(Query, Selector, Opts, From, Limit) ->
 	Quer = #search{ndocs = Limit, nskip = From, field_selector = mongodb:encoderec_selector(Query, Selector),
-	             criteria = mongodb:encode(translateopts(Query, Opts,[{<<"query">>, {bson, mongodb:encoderec(Query)}}]))}, 
+	             criteria = mongodb:encode(translateopts(Query, Opts,[{<<"query">>, {bson, mongodb:encode_findrec(Query)}}]))}, 
 	case mongodb:exec_find(name(element(1,Query)), Quer) of
 		not_connected ->
 			not_connected;
@@ -190,14 +190,20 @@ findOpt(Query, Selector, Opts, From, Limit) ->
 		timeout -> 
 		   timeout;
 		Result ->
+            case  proplists:lookup(explain,Opts) of
+                {explain,true} ->
+                    mongodb:decode(Result);
+                _ ->
+                    mongodb:decoderec(Query, Result)
+            end
 			% If opt is explain, it will crash
-			try mongodb:decoderec(Query, Result) of
-				Res ->
-					Res
-			catch
-				error:_ ->
-					mongodb:decode(Result)
-			end
+			%try mongodb:decoderec(Query, Result) of
+			%	Res ->
+			%		Res
+			%catch
+		%		error:_ ->
+		%			mongodb:decode(Result)
+		%	end
 	end.
 findOpt(Col, #search{} = Q, Opts) ->
 	findOpt(Col, Q#search.criteria, Q#search.field_selector, Opts, Q#search.nskip, Q#search.ndocs).
@@ -206,7 +212,7 @@ findOpt(#search{} = Q, Opts) ->
 	
 cursor(Query, Selector, Opts, From, Limit) ->
 	Quer = #search{ndocs = Limit, nskip = From, field_selector = mongodb:encoderec_selector(Query, Selector),
-	             criteria = mongodb:encode(translateopts(Query, Opts,[{<<"query">>, {bson, mongodb:encoderec(Query)}}])),
+	             criteria = mongodb:encode(translateopts(Query, Opts,[{<<"query">>, {bson, mongodb:encode_findrec(Query)}}])),
 				 opts = ?QUER_OPT_CURSOR},
 	case mongodb:exec_cursor(name(element(1,Query)), Quer) of
 		not_connected ->
@@ -268,6 +274,9 @@ gen_index_name([{K, V}|T], Acc) when is_binary(K) ->
 gen_index_name([{K, V}|T], Acc) ->
     gen_index_name(T, [integer_to_list(V), K  |Acc]).
 
+% If you wish to index on an embedded document, use proplists.
+% Example: ensureIndex(<<"mydoc">>, [{<<"name">>, 1}]).
+%  You can use lists, they will be turned into binaries.
 ensureIndex(Collection, KeyVals) when is_binary(Collection); is_list(Collection) ->
     ok = check_index_vals(KeyVals),
     NS = name(Collection),
@@ -278,10 +287,13 @@ ensureIndex(Collection, KeyVals) when is_binary(Collection); is_list(Collection)
                           ]),
     mongodb:ensure_index(<<DB/binary, ".system.indexes">>,  Bin, KeyCache);
 
+% Example: ensureIndex(#mydoc{}, [{#mydoc.name, 1}])
 ensureIndex(Rec, Keys) ->
     NS = name(element(1,Rec)),
     KeyCache = {{ NS, Keys }, true},
-	Bin = mongodb:encode([{plaintext, <<"name">>, mongodb:gen_keyname(Rec, Keys)}, 
+    Fields = list_to_tuple(element(element(2, Rec), ?RECTABLE)),
+    KeyVals = lists:map(fun({K,V}) -> {atom_to_binary(element(K-1, Fields), latin1), V} end, Keys),
+	Bin = mongodb:encode([{plaintext, <<"name">>, gen_index_name(KeyVals, [])}, 
 			              {plaintext, <<"ns">>, NS}, 
 			              {<<"key">>, {bson, mongodb:encoderec_selector(Rec, Keys)}}]),
 	mongodb:ensure_index(<<DB/binary, ".system.indexes">>,Bin, KeyCache).
@@ -339,6 +351,11 @@ eval(Javascript) when is_binary(Javascript) ->
    mongodb:exec_cmd(DB, [{plaintext, <<"$eval">>, Javascript}]);
 eval(Javascript) when is_list(Javascript) ->	
    mongodb:exec_cmd(DB, [{plaintext, <<"$eval">>, list_to_binary(Javascript)}]).
+
+stats(C) when is_tuple(C) ->
+    stats(atom_to_binary(element(1,C),latin1));
+stats(Collection) ->
+    runCmd([{"collstats", Collection}]).
 
 repairDatabase() ->
 	runCmd([{"repairDatabase", 1}]).

@@ -19,7 +19,7 @@
 %  field name also has to match the record name.
 -define(R(Rec), record_info(fields, Rec)).
 -define(RECTABLE, {
-                   [recindex,docid,name,i, {address, 2}, tags],
+                   [recindex,docid,name,i, {address, 4}, tags],
                    ?R(fs_file),
                    ?R(fs_chunk),
 				   ?R(address)
