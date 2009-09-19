@@ -718,12 +718,12 @@ decoderec(Rec, Bin) ->
 	decode_records([], Bin, tuple_size(Rec), element(1,Rec), element(2, Rec), Fields).
 
 decode_records(RecList, <<_ObjSize:32/little, Bin/binary>>, TupleSize, Name, TabIndex, Fields) ->
-	{FieldList, Remain} = rec_field_list(Bin, [{1, Name},{2, TabIndex}], 3, Fields, not_done),
-	% io:format("~p~n", [FieldList]),
-	NewRec = erlang:make_tuple(TupleSize, undefined, FieldList),
-	decode_records([NewRec|RecList], Remain, TupleSize, Name, TabIndex, Fields);
+    {FieldList, Remain} = get_fields([], Fields, Bin),
+    % io:format("~p~n", [FieldList]),
+    NewRec = erlang:make_tuple(TupleSize, undefined, [{1, Name},{2, TabIndex}|FieldList]),
+    decode_records([NewRec|RecList], Remain, TupleSize, Name, TabIndex, Fields);
 decode_records(R, <<>>, _, _, _, _) ->
-	lists:reverse(R).
+    lists:reverse(R).
 
 get_fields(RecVals, Fields, Bin) ->
     case rec_field_list(Bin, RecVals, 3, Fields, not_done) of
