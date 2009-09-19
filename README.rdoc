@@ -69,6 +69,50 @@ I haven't used erlmongo in production yet, so all the bugs might not be ironed o
   % exists example: 
   Mong:find(#mydoc{tags = {exists, false}}, undefined, 0,0).
 
+   
+= GridFS Usage:
+  rr("erlmongo.hrl").
+  % Set mongodb server info. singleServer() is the same as singleServer("localhost:27017")
+  mongodb:singleServer().
+  mongodb:connect().
+  % Create an interface for test database (it has to be a binary)
+  Mong = mongoapi:new(<<"test">>).
+  
+  % Open a file
+  {ok,File} = file:read_file("example.mp3").
+  
+  % Store a file
+  gridfs:storeFile(Mong, "example.mp3", File).
+  gridfs:storeFile(Mong, "mp3_folder", "example.mp3", File).
+  
+  % Remove all matching files
+  gridfs:removeFile(Mong, "example.mp3").
+  gridfs:removeFile(Mong, "mp3_folder", "example.mp3").
+  
+  % Return {#fs_file{},binary()}
+  gridfs:getFile(Mong, "example.mp3").
+  gridfs:getFile(Mong, "mp3_folder", "example.mp3").
+  
+  % Return #fs_file{}
+  gridfs:getFileInfo(Mong, "example.mp3").
+  gridfs:getFileInfo(Mong, "mp3_folder", "example.mp3").
+  
+  % Same as above but with record
+  gridfs:storeFile(Mong, #fs_file{filename = "example.mp3", metadata = "this song is beautiful"}, File).
+  gridfs:storeFile(Mong, "mp3_folder", #fs_file{filename = "example.mp3"}, File).
+  
+  % Remove all matching files
+  gridfs:removeFile(Mong, #fs_file{filename = "example.mp3"}).
+  gridfs:removeFile(Mong, "mp3_folder", #fs_file{filename = "example.mp3"}).
+  
+  % Return {#fs_file{},binary()}
+  gridfs:getFile(Mong, #fs_file{filename = "example.mp3"}).
+  gridfs:getFile(Mong, "mp3_folder", #fs_file{filename = "example.mp3"}).
+  
+  % Return #fs_file{}
+  gridfs:getFileInfo(Mong, #fs_file{filename = "example.mp3"}).
+  gridfs:getFileInfo(Mong, "mp3_folder", #fs_file{filename = "example.mp3"}).
+ 
 == Supported operation list
 Collections
 * remove
