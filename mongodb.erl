@@ -6,7 +6,6 @@
          encoderec/1, encoderec_selector/2, gen_keyname/2, decoderec/2, encode/1, decode/1,
 		 encode_findrec/1, gen_prop_keyname/2, create_id/0,
          singleServer/1, singleServer/0, masterSlave/2,masterMaster/2, replicaPairs/2]).
--export([dec2hex/2,hex2dec/2]).
 -include("erlmongo.hrl").
 % -define(RIN, record_info(fields, enctask)).
 
@@ -891,11 +890,6 @@ encode_element({Name, {binary, 2, Data}}) ->
 encode_element({Name, {binary, SubType, Data}}) ->
   	StringEncoded = encode_cstring(Name),
   	<<5, StringEncoded/binary, (size(Data)):32/little-signed, SubType:8, Data/binary>>;
-encode_element({Name, {oid, <<First:8/little-binary-unit:8, Second:4/little-binary-unit:8>>}}) ->
-  	FirstReversed = lists:reverse(binary_to_list(First)),
-  	SecondReversed = lists:reverse(binary_to_list(Second)),
-	OID = list_to_binary(lists:append(FirstReversed, SecondReversed)),
-	<<7, Name/binary, 0, OID/binary>>;
 encode_element({Name, Value}) when is_integer(Value),Value >= -2147483647,Value =< 2147483647 ->
     <<16, Name/binary, 0, Value:32/little-signed>>;
 encode_element({Name, Value}) when is_integer(Value) ->
