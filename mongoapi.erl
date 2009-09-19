@@ -1,7 +1,7 @@
 -module(mongoapi, [DB]).
-% -export([save/1,findOne/2,findOne/1,find/1,find/2,find/3,find/4, update/2, insert/1]).
+% -export([save/1,findOne/2,findOne/1,find/1,find/2,find/3,find/4, update/2, insert/1, eval/1]).
 -compile(export_all).
--include_lib("erlmongo.hrl").
+-include("erlmongo.hrl").
 
 name([_|_] = Collection) ->
 	name(list_to_binary(Collection));
@@ -14,7 +14,7 @@ remove(Rec, Selector) when is_tuple(Rec) ->
 	mongodb:exec_delete(name(element(1,Rec)), #delete{selector = mongodb:encoderec_selector(Rec, Selector)});
 remove(Col, Selector) ->
 	mongodb:exec_delete(name(Col), #delete{selector = mongodb:encode(Selector)}).
-	
+
 	
 save(Collection, [_|_] = L) ->
 	% io:format("Save on ~p~n", [L]),
@@ -55,6 +55,7 @@ save(Rec) ->
 	end.
 
 
+
 update(Collection, [_|_] = Selector, [_|_] = Doc, true) ->
 	update(Collection, [_|_] = Selector, [_|_] = Doc, 1);
 update(Collection, [_|_] = Selector, [_|_] = Doc, false) ->
@@ -89,7 +90,7 @@ batchInsert(LRecs) ->
 	[FRec|_] = LRecs,
 	DocBin = lists:foldl(fun(Rec, Bin) -> <<Bin/binary, (mongodb:encoderec(Rec))/binary>> end, <<>>, LRecs),
 	mongodb:exec_insert(name(element(1,FRec)), #insert{documents = DocBin}).
-	
+
 	
 % Advanced queries:
 %  Documents with even i:            Mong:find(#mydoc{i = {mod, 2, 0}}, undefined, 0,0).
@@ -99,19 +100,40 @@ batchInsert(LRecs) ->
 %  exists example: Mong:find(#mydoc{tags = {exists, false}}, undefined, 0,0).
 %  Advanced query options: gt,lt,gte,lte, ne, in, nin, all, size, exists
 
-findOne(Col, []) ->
-	find(Col, [], undefined, 0, 1);
-findOne(Col, [_|_] = Query) when is_tuple(Col) == false ->
-	find(Col, Query, undefined, 0, 0);
-findOne(Query, Selector) when is_tuple(Query) ->
-	[Res] = find(Query, Selector, 0, 1),
-	Res.
-	
-findOne(Query) when is_tuple(Query) ->
-	[Res] = find(Query, undefined, 0, 1),
-	Res.
+%% returns proplists
 findOne(Col, [_|_] = Query, [_|_] = Selector) ->
-	find(Col, Query, Selector, 0, 1).
+    case find(Col, Query, Selector, 0, 1) of
+        [Res] -> Res;
+        [] -> []
+    end.  
+
+%% returns proplists
+findOne(Col, []) ->
+	case find(Col, [], undefined, 0, 1) of
+        [Res] -> Res;
+        [] -> []
+    end;
+
+%% returns proplists
+findOne(Col, [_|_] = Query) when is_tuple(Col) == false ->
+	case find(Col, Query, undefined, 0, 1) of
+        [Res] -> Res;
+        [] -> []
+    end;
+
+%% returns record
+findOne(Query, Selector) when is_tuple(Query) ->
+	case find(Query, Selector, 0, 1) of
+        [Res] -> Res;
+        [] -> []
+    end.
+
+%% returns record
+findOne(Query) when is_tuple(Query) ->
+    case find(Query, undefined, 0, 1) of
+        [Res] -> Res;
+        [] -> []
+    end.
 
 find(Col, #search{} = Q) ->
 	find(Col, Q#search.criteria, Q#search.field_selector, Q#search.nskip, Q#search.ndocs).
@@ -125,25 +147,29 @@ find(Col, Query, Selector, From, Limit) ->
 			not_connected;
 		<<>> ->
 			[];
-		Res ->
-			mongodb:decode(Res)
+		timeout -> 
+		   timeout;
+        Res ->
+            case mongodb:decode(Res) of
+                Final=[[_|_]|_] ->
+                    Final;
+                Final=[_|_] ->
+                    [Final];
+                Else -> Else
+            end
 	end.
+
 find(Query, Selector, From, Limit) ->
-	Quer = #search{ndocs = Limit, nskip = From, criteria = mongodb:encode_findrec(Query), field_selector = mongodb:encoderec_selector(Query, Selector)},
+	Quer = #search{ndocs = Limit, nskip = From, criteria = mongodb:encoderec(Query), field_selector = mongodb:encoderec_selector(Query, Selector)},
 	case mongodb:exec_find(name(element(1,Query)), Quer) of
 		not_connected ->
 			not_connected;
 		<<>> ->
 			[];
-		Result ->
-			mongodb:decoderec(Query, Result)
-			% try mongodb:decoderec(Query, Result) of
-			% 	Res ->
-			% 		Res
-			% catch
-			% 	error:_ ->
-			% 		mongodb:decode(Result)
-			% end
+		timeout -> 
+		    timeout;
+        Res ->
+            mongodb:decoderec(Query, Res)
 	end.
 
 % opts: [reverse, {sort, SortyBy}, explain, {hint, Hint}, snapshot]
@@ -155,12 +181,14 @@ findOpt(Col, Query, Selector, Opts, From, Limit) ->
 % Hint example: #mydoc.name
 findOpt(Query, Selector, Opts, From, Limit) ->
 	Quer = #search{ndocs = Limit, nskip = From, field_selector = mongodb:encoderec_selector(Query, Selector),
-	             criteria = mongodb:encode(translateopts(Query, Opts,[{<<"query">>, {bson, mongodb:encode_findrec(Query)}}]))}, 
+	             criteria = mongodb:encode(translateopts(Query, Opts,[{<<"query">>, {bson, mongodb:encoderec(Query)}}]))}, 
 	case mongodb:exec_find(name(element(1,Query)), Quer) of
 		not_connected ->
 			not_connected;
 		<<>> ->
 			[];
+		timeout -> 
+		   timeout;
 		Result ->
 			% If opt is explain, it will crash
 			try mongodb:decoderec(Query, Result) of
@@ -178,7 +206,7 @@ findOpt(#search{} = Q, Opts) ->
 	
 cursor(Query, Selector, Opts, From, Limit) ->
 	Quer = #search{ndocs = Limit, nskip = From, field_selector = mongodb:encoderec_selector(Query, Selector),
-	             criteria = mongodb:encode(translateopts(Query, Opts,[{<<"query">>, {bson, mongodb:encode_findrec(Query)}}])),
+	             criteria = mongodb:encode(translateopts(Query, Opts,[{<<"query">>, {bson, mongodb:encoderec(Query)}}])),
 				 opts = ?QUER_OPT_CURSOR},
 	case mongodb:exec_cursor(name(element(1,Query)), Quer) of
 		not_connected ->
@@ -226,31 +254,48 @@ translateopts(Rec, [hint, Hint|T], L) ->
 translateopts(_, [], L) ->
 	L.
 
-% If you wish to index on an embedded document, use proplists.
-% Example: ensureIndex(<<"mydoc">>, [{<<"name">>, 1}]).
-%  You can use lists, they will be turned into binaries.
-ensureIndex([_|_] = Collection, Keys) ->
-	ensureIndex(list_to_binary(Collection), Keys);
-ensureIndex(<<_/binary>> = Collection, Keys) ->
-	Bin = mongodb:encode([{plaintext, <<"name">>, mongodb:gen_prop_keyname(Keys, <<>>)},
-	 					  {plaintext, <<"ns">>, name(Collection)},
-	                      {<<"key">>, {bson, mongodb:encode(Keys)}}]),
-	mongodb:ensureIndex(DB, Bin);
-% Example: ensureIndex(#mydoc{}, [{#mydoc.name, 1}])
+
+check_index_vals([]) -> ok;
+check_index_vals([{_K, V}|T]) when V =:= 1;V =:= -1 -> %% index must be either 1 or -1
+    check_index_vals(T);
+check_index_vals(_) -> 
+    error.
+
+gen_index_name([], Acc) -> 
+    list_to_binary(string:join(lists:reverse(Acc), "_"));
+gen_index_name([{K, V}|T], Acc) when is_binary(K) ->
+    gen_index_name([{binary_to_list(K), V}|T],  Acc);
+gen_index_name([{K, V}|T], Acc) ->
+    gen_index_name(T, [integer_to_list(V), K  |Acc]).
+
+ensureIndex(Collection, KeyVals) when is_binary(Collection); is_list(Collection) ->
+    ok = check_index_vals(KeyVals),
+    NS = name(Collection),
+    KeyCache = {{ NS, KeyVals }, true},
+    Bin = mongodb:encode([{plaintext, <<"ns">>, NS},
+                          {<<"key">>, {bson, mongodb:encode(KeyVals)}},
+                          {plaintext, <<"name">>, gen_index_name(KeyVals,[])}
+                          ]),
+    mongodb:ensure_index(<<DB/binary, ".system.indexes">>,  Bin, KeyCache);
+
 ensureIndex(Rec, Keys) ->
+    NS = name(element(1,Rec)),
+    KeyCache = {{ NS, Keys }, true},
 	Bin = mongodb:encode([{plaintext, <<"name">>, mongodb:gen_keyname(Rec, Keys)}, 
-			              {plaintext, <<"ns">>, name(element(1,Rec))}, 
+			              {plaintext, <<"ns">>, NS}, 
 			              {<<"key">>, {bson, mongodb:encoderec_selector(Rec, Keys)}}]),
-	mongodb:ensureIndex(DB, Bin).
+	mongodb:ensure_index(<<DB/binary, ".system.indexes">>,Bin, KeyCache).
+
+
 	
 deleteIndexes([_|_] = Collection) ->
 	deleteIndexes(list_to_binary(Collection));
 deleteIndexes(<<_/binary>> = Collection) ->
-	mongodb:clearIndexCache(),
+    mongodb:clear_index_cache(),
 	mongodb:exec_cmd(DB, [{plaintext, <<"deleteIndexes">>, Collection}, {plaintext, <<"index">>, <<"*">>}]).
 
 deleteIndex(Rec, Key) ->
-	mongodb:clearIndexCache(),
+    mongodb:clear_index_cache(),
 	mongodb:exec_cmd(DB,[{plaintext, <<"deleteIndexes">>, atom_to_binary(element(1,Rec), latin1)},
 				  		 {plaintext, <<"index">>, mongodb:gen_keyname(Rec,Key)}]).
 
@@ -264,7 +309,7 @@ count(<<_/binary>> = Col) ->
 			false
 	end;
 count(Col) when is_tuple(Col) ->
-	count(atom_to_binary(Col, latin1)).
+	count(atom_to_binary(element(1,Col),latin1)).
 	
 
 addUser(U, P) when is_binary(U) ->
@@ -288,14 +333,17 @@ runCmd([_|_] = L) ->
 runCmd(<<_/binary>> = L) ->
 	runCmd(binary_to_list(L)).
 
-stats(C) when is_tuple(C) ->
-	stats(atom_to_binary(element(1,C),latin1));
-stats(Collection) ->
-	runCmd([{"collstats", Collection}]).
+%% run js code on the server, watch out for syntax error because it may crash the server!
+%% DO NOT FEED IN USER GENERATED JS CODE!
+eval(Javascript) when is_binary(Javascript) ->
+   mongodb:exec_cmd(DB, [{plaintext, <<"$eval">>, Javascript}]);
+eval(Javascript) when is_list(Javascript) ->	
+   mongodb:exec_cmd(DB, [{plaintext, <<"$eval">>, list_to_binary(Javascript)}]).
 
 repairDatabase() ->
 	runCmd([{"repairDatabase", 1}]).
 dropDatabase() ->
+    mongodb:clear_index_cache(),
 	runCmd([{"dropDatabase", 1}]).
 cloneDatabase(From) when is_list(From); is_binary(From) ->
 	runCmd([{"clone", From}]).
@@ -303,6 +351,7 @@ cloneDatabase(From) when is_list(From); is_binary(From) ->
 dropCollection(C) when is_tuple(C) ->
 	dropCollection(atom_to_binary(element(1,C),latin1));
 dropCollection(Collection) ->
+    mongodb:clear_index_cache(),
 	runCmd([{"drop", Collection}]).
 
 createCollection(Name) ->
